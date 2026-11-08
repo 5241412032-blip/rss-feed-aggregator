@@ -1,0 +1,421 @@
+import { useState, useRef } from 'react';
+import './App.css';
+import { useFeeds, useArticles, useApi, formatDate, getFavicon } from './hooks';
+import AddFeedModal from './AddFeedModal';
+import Toast from './Toast';
+
+// ─── Icons ────────────────────────────────────────────────────────────────────
+const Icon = {
+  Rss: () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>
+    </svg>
+  ),
+  Search: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+  ),
+  Refresh: ({ spinning }) => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+      className={spinning ? 'spinning' : ''}>
+      <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+    </svg>
+  ),
+  Plus: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+    </svg>
+  ),
+  Trash: () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+    </svg>
+  ),
+  Bookmark: ({ filled }) => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2">
+      <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+    </svg>
+  ),
+  Link: () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+      <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+    </svg>
+  ),
+  Inbox: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>
+      <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
+    </svg>
+  ),
+  BookmarkNav: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+    </svg>
+  ),
+  Star: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+    </svg>
+  ),
+  Check: () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <polyline points="20 6 9 17 4 12"/>
+    </svg>
+  ),
+};
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+export default function App() {
+  const api = useApi();
+  const { feeds, stats, loading: feedsLoading, refresh: refreshFeeds } = useFeeds();
+  const [selectedFeedId, setSelectedFeedId] = useState(null);
+  const [view, setView] = useState('all'); // 'all' | 'unread' | 'bookmarks'
+  const [search, setSearch] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [toasts, setToasts] = useState([]);
+  const toastIdRef = useRef(0);
+  const searchTimer = useRef(null);
+
+  function toast(message, type = 'info') {
+    const id = ++toastIdRef.current;
+    setToasts(t => [...t, { id, message, type }]);
+  }
+
+  function removeToast(id) {
+    setToasts(t => t.filter(x => x.id !== id));
+  }
+
+  // Debounced search
+  function handleSearchChange(val) {
+    setSearchInput(val);
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => setSearch(val), 400);
+  }
+
+  // Build article filters
+  const articleFilters = {
+    feed_id: selectedFeedId,
+    search: search || undefined,
+    unread_only: view === 'unread' ? true : undefined,
+    bookmarked_only: view === 'bookmarks' ? true : undefined,
+    limit: 50,
+  };
+
+  const { articles, total, loading: articlesLoading, reload: reloadArticles, setArticles } = useArticles(articleFilters);
+
+  async function handleAddFeed(url, category) {
+    const result = await api.post('/feeds', { url, category });
+    await refreshFeeds();
+    await reloadArticles();
+    toast(`✅ Added "${result.title}" — ${result.newArticles} articles fetched`, 'success');
+  }
+
+  async function handleDeleteFeed(feedId, e) {
+    e.stopPropagation();
+    if (!window.confirm('Remove this feed and all its articles?')) return;
+    await api.del(`/feeds/${feedId}`);
+    if (selectedFeedId === feedId) setSelectedFeedId(null);
+    await refreshFeeds();
+    await reloadArticles();
+    toast('Feed removed', 'info');
+  }
+
+  async function handleRefreshAll() {
+    setRefreshing(true);
+    try {
+      await api.post('/feeds/refresh-all', {});
+      await refreshFeeds();
+      await reloadArticles();
+      toast('All feeds refreshed', 'success');
+    } catch (err) {
+      toast('Refresh failed: ' + err.message, 'error');
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function handleRefreshFeed(feedId, e) {
+    e.stopPropagation();
+    try {
+      const r = await api.post(`/feeds/${feedId}/refresh`, {});
+      await refreshFeeds();
+      await reloadArticles();
+      toast(`Refreshed: ${r.newArticles} new articles`, 'success');
+    } catch (err) {
+      toast('Refresh failed', 'error');
+    }
+  }
+
+  async function handleMarkRead(articleId, isRead) {
+    await api.patch(`/articles/${articleId}/read`, { is_read: isRead });
+    setArticles(prev => prev.map(a => a.id === articleId ? { ...a, is_read: isRead ? 1 : 0 } : a));
+    await refreshFeeds(); // update unread counts
+  }
+
+  async function handleBookmark(articleId) {
+    const result = await api.patch(`/articles/${articleId}/bookmark`, {});
+    setArticles(prev => prev.map(a => a.id === articleId ? { ...a, is_bookmarked: result.is_bookmarked } : a));
+  }
+
+  async function handleMarkAllRead() {
+    const body = selectedFeedId ? { feed_id: selectedFeedId } : {};
+    await api.post('/articles/mark-all-read', body);
+    await reloadArticles();
+    await refreshFeeds();
+    toast('Marked all as read', 'success');
+  }
+
+  function openArticle(article) {
+    if (!article.is_read) handleMarkRead(article.id, true);
+    if (article.link) window.open(article.link, '_blank', 'noopener');
+  }
+
+  // Current view label
+  const currentFeed = feeds.find(f => f.id === selectedFeedId);
+  const viewTitle = currentFeed ? currentFeed.title
+    : view === 'unread' ? 'Unread Articles'
+    : view === 'bookmarks' ? 'Bookmarked Articles'
+    : 'All Articles';
+
+  return (
+    <div className="app-layout">
+      {/* ─── Sidebar ──────────────────────────────────────────────────── */}
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <div className="sidebar-logo">
+            <Icon.Rss />
+            RSS Aggregator
+          </div>
+          <div className="sidebar-stats">
+            <div className="stat-chip">
+              <div className="num">{stats.total_feeds ?? 0}</div>
+              <div className="lbl">Feeds</div>
+            </div>
+            <div className="stat-chip">
+              <div className="num">{stats.unread_articles ?? 0}</div>
+              <div className="lbl">Unread</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav */}
+        <div className="sidebar-nav">
+          <button className={`nav-item ${view === 'all' && !selectedFeedId ? 'active' : ''}`}
+            onClick={() => { setView('all'); setSelectedFeedId(null); }}>
+            <Icon.Inbox /> All Articles
+            <span className="badge">{stats.total_articles ?? 0}</span>
+          </button>
+          <button className={`nav-item ${view === 'unread' && !selectedFeedId ? 'active' : ''}`}
+            onClick={() => { setView('unread'); setSelectedFeedId(null); }}>
+            <Icon.Star /> Unread
+            <span className="badge">{stats.unread_articles ?? 0}</span>
+          </button>
+          <button className={`nav-item ${view === 'bookmarks' ? 'active' : ''}`}
+            onClick={() => { setView('bookmarks'); setSelectedFeedId(null); }}>
+            <Icon.BookmarkNav /> Bookmarks
+            <span className="badge">{stats.bookmarked_articles ?? 0}</span>
+          </button>
+        </div>
+
+        {/* Feed list */}
+        <div className="feeds-section">
+          <div className="feeds-section-title">
+            MY FEEDS
+            <span style={{ fontSize: '0.65rem' }}>{feeds.length}</span>
+          </div>
+
+          {feedsLoading && <div style={{ padding: '8px 10px', color: 'var(--text-muted)', fontSize: '0.8rem' }}>Loading...</div>}
+
+          {feeds.map(feed => {
+            const favicon = getFavicon(feed.url);
+            const initials = (feed.title || 'F').substring(0, 1).toUpperCase();
+            return (
+              <div
+                key={feed.id}
+                className={`feed-item ${selectedFeedId === feed.id ? 'active' : ''}`}
+                onClick={() => { setSelectedFeedId(feed.id); setView('all'); }}
+              >
+                {favicon
+                  ? <img src={favicon} alt="" className="feed-favicon" onError={e => e.target.style.display='none'} />
+                  : <div className="feed-favicon-placeholder">{initials}</div>}
+                <span className="feed-name" title={feed.title}>{feed.title || feed.url}</span>
+                {feed.unread_count > 0 && <span className="feed-unread">{feed.unread_count}</span>}
+                <div className="feed-actions">
+                  <button className="icon-btn" title="Refresh" onClick={(e) => handleRefreshFeed(feed.id, e)}
+                    style={{ color: 'var(--accent)' }}>
+                    <Icon.Refresh />
+                  </button>
+                  <button className="icon-btn" title="Remove feed" onClick={(e) => handleDeleteFeed(feed.id, e)}>
+                    <Icon.Trash />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+
+          {!feedsLoading && feeds.length === 0 && (
+            <div style={{ padding: '12px 10px', color: 'var(--text-muted)', fontSize: '0.8rem', lineHeight: 1.6 }}>
+              No feeds yet. Add your first RSS feed below!
+            </div>
+          )}
+        </div>
+
+        <div className="add-feed-area">
+          <button className="btn-add-feed" onClick={() => setShowAddModal(true)}>
+            <Icon.Plus /> Add RSS Feed
+          </button>
+        </div>
+      </aside>
+
+      {/* ─── Main ─────────────────────────────────────────────────────── */}
+      <main className="main-content">
+        {/* Top bar */}
+        <div className="topbar">
+          <div>
+            <div className="topbar-title">{viewTitle}</div>
+            <div className="topbar-subtitle">{total} articles{search ? ` matching "${search}"` : ''}</div>
+          </div>
+
+          <div className="search-bar">
+            <span className="search-icon"><Icon.Search /></span>
+            <input
+              type="text"
+              placeholder="Search articles..."
+              value={searchInput}
+              onChange={e => handleSearchChange(e.target.value)}
+            />
+          </div>
+
+          <div className="topbar-actions">
+            <button className="btn btn-ghost btn-sm" onClick={handleMarkAllRead} title="Mark all as read">
+              <Icon.Check /> Mark all read
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={handleRefreshAll} disabled={refreshing}>
+              <Icon.Refresh spinning={refreshing} />
+              {refreshing ? 'Refreshing...' : 'Refresh All'}
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={() => setShowAddModal(true)}>
+              <Icon.Plus /> Add Feed
+            </button>
+          </div>
+        </div>
+
+        {/* Article list */}
+        <div className="article-list-container">
+          {articlesLoading && articles.length === 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {[1,2,3,4,5].map(i => (
+                <div key={i} style={{ height: 90, borderRadius: 10 }} className="skeleton" />
+              ))}
+            </div>
+          )}
+
+          {!articlesLoading && articles.length === 0 && (
+            <div className="empty-state">
+              <Icon.Rss />
+              <h3>
+                {feeds.length === 0 ? 'No feeds yet' : 'No articles found'}
+              </h3>
+              <p>
+                {feeds.length === 0
+                  ? 'Click "Add RSS Feed" to subscribe to your first news source.'
+                  : 'Try adjusting your filters or add more feeds.'}
+              </p>
+              {feeds.length === 0 && (
+                <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={() => setShowAddModal(true)}>
+                  <Icon.Plus /> Add Your First Feed
+                </button>
+              )}
+            </div>
+          )}
+
+          {articles.map(article => (
+            <ArticleCard
+              key={article.id}
+              article={article}
+              onOpen={() => openArticle(article)}
+              onToggleRead={() => handleMarkRead(article.id, !article.is_read)}
+              onBookmark={() => handleBookmark(article.id)}
+            />
+          ))}
+        </div>
+      </main>
+
+      {/* ─── Modals & Toasts ─────────────────────────────────────────── */}
+      {showAddModal && (
+        <AddFeedModal
+          onClose={() => setShowAddModal(false)}
+          onAdd={handleAddFeed}
+        />
+      )}
+      <Toast toasts={toasts} removeToast={removeToast} />
+    </div>
+  );
+}
+
+// ─── Article Card ─────────────────────────────────────────────────────────────
+function ArticleCard({ article, onOpen, onToggleRead, onBookmark }) {
+  return (
+    <div className={`article-card ${article.is_read ? 'read' : ''}`} onClick={onOpen}>
+      {!article.is_read && <div className="article-unread-dot" />}
+
+      {article.image_url && (
+        <img
+          src={article.image_url}
+          alt=""
+          className="article-image"
+          onError={e => e.target.style.display = 'none'}
+        />
+      )}
+
+      <div className="article-body">
+        <div className="article-meta">
+          <span className="article-feed-tag">{article.feed_title || 'Feed'}</span>
+          {article.category && article.category !== 'General' && (
+            <span className="article-feed-tag" style={{ background: 'var(--bg-hover)', color: 'var(--text-muted)' }}>
+              {article.category}
+            </span>
+          )}
+          {article.author && <span className="article-author">by {article.author}</span>}
+          <span className="article-date">{formatDate(article.pub_date)}</span>
+        </div>
+
+        <div className="article-title">{article.title}</div>
+
+        {article.description && (
+          <div className="article-desc">{article.description}</div>
+        )}
+
+        <div className="article-actions" onClick={e => e.stopPropagation()}>
+          <button
+            className={`action-btn ${article.is_bookmarked ? 'bookmarked' : ''}`}
+            onClick={onBookmark}
+            title={article.is_bookmarked ? 'Remove bookmark' : 'Bookmark'}
+          >
+            <Icon.Bookmark filled={!!article.is_bookmarked} />
+            {article.is_bookmarked ? 'Bookmarked' : 'Bookmark'}
+          </button>
+          <button className="action-btn" onClick={onToggleRead} title="Toggle read">
+            <Icon.Check />
+            {article.is_read ? 'Mark unread' : 'Mark read'}
+          </button>
+          {article.link && (
+            <button className="action-btn"
+              onClick={() => window.open(article.link, '_blank', 'noopener')}
+              title="Open original">
+              <Icon.Link /> Open
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Add Icon to window for Toast/Modal use
+window._Icon = Icon;
+
