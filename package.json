@@ -1,14 +1,15 @@
 {
-  "name": "rss-aggregator",
+  "name": "rss-feed-aggregator",
   "version": "1.0.0",
-  "description": "RSS Feed Aggregator - read all your feeds in one clean dashboard",
+  "description": "RSS Feed Aggregator — React + Vercel Serverless",
+  "dependencies": {
+    "rss-parser": "^3.13.0"
+  },
   "scripts": {
-    "install:all": "npm.cmd install --prefix server && npm.cmd install --prefix client",
-    "dev:server": "npm.cmd --prefix server run dev",
-    "dev:client": "npm.cmd --prefix client start",
-    "build": "npm.cmd --prefix client run build",
-    "start": "npm.cmd --prefix server start",
-    "setup": "npm.cmd run install:all && npm.cmd run build"
+    "build": "cd client && npm install && npm run build",
+    "vercel-build": "cd client && npm install && npm run build",
+    "start": "node server/index.js",
+    "dev:server": "node server/index.js",
+    "dev:client": "cd client && npm start"
   }
 }
-

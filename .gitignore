@@ -3,6 +3,9 @@ node_modules/
 client/node_modules/
 server/node_modules/
 
+# Lock files (keep package-lock for reproducibility, but ignore yarn)
+yarn.lock
+
 # Production build
 client/build/
 
@@ -27,3 +30,4 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
